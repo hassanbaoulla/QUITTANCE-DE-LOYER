@@ -1,0 +1,371 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from datetime import datetime
+from tkcalendar import DateEntry
+import locale
+import os
+import platform
+import sys
+from babel.dates import format_date
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.lib.units import mm
+import subprocess
+import webbrowser
+
+class QuittanceApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("HAJ-ALI")
+        self.root.geometry("800x700")  # Augmenté la hauteur pour le nouveau bouton
+        
+        # Configuration locale pour les dates en français
+        try:
+            locale.setlocale(locale.LC_ALL, 'fr_FR.UTF-8')
+        except locale.Error:
+            try:
+                locale.setlocale(locale.LC_ALL, 'fra_fra')
+            except locale.Error:
+                pass
+
+        # Créer le dossier quittances s'il n'existe pas
+        self.quittances_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quittances")
+        if not os.path.exists(self.quittances_dir):
+            os.makedirs(self.quittances_dir)
+        
+        # Style
+        style = ttk.Style()
+        style.configure("TLabel", padding=5, font=('Helvetica', 10))
+        style.configure("TEntry", padding=5)
+        style.configure("TButton", padding=5)
+        
+        # Frame principal avec scrollbar
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Canvas et scrollbar
+        self.canvas = tk.Canvas(self.main_frame)
+        self.scrollbar = ttk.Scrollbar(self.main_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        
+        # Bind mousewheel
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        
+        # Pack canvas et scrollbar
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+        
+        # Titre
+        title_label = ttk.Label(self.scrollable_frame, text="Générateur de Quittance de Loyer", font=('Helvetica', 14, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=2, pady=10)
+        
+        # Propriétaire
+        ttk.Label(self.scrollable_frame, text="Information Propriétaire", font=('Helvetica', 12, 'bold')).grid(row=1, column=0, columnspan=2, pady=10)
+        ttk.Label(self.scrollable_frame, text="Nom du propriétaire *").grid(row=2, column=0)
+        self.prop_nom = ttk.Entry(self.scrollable_frame, width=40)
+        self.prop_nom.grid(row=2, column=1, pady=5)
+        
+        ttk.Label(self.scrollable_frame, text="Adresse du propriétaire *").grid(row=3, column=0)
+        self.prop_adresse = ttk.Entry(self.scrollable_frame, width=40)
+        self.prop_adresse.grid(row=3, column=1, pady=5)
+        
+        # Locataire
+        ttk.Label(self.scrollable_frame, text="Information Locataire", font=('Helvetica', 12, 'bold')).grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Label(self.scrollable_frame, text="Nom du locataire *").grid(row=5, column=0)
+        self.loc_nom = ttk.Entry(self.scrollable_frame, width=40)
+        self.loc_nom.grid(row=5, column=1, pady=5)
+        
+        ttk.Label(self.scrollable_frame, text="Adresse du logement *").grid(row=6, column=0)
+        self.loc_adresse = ttk.Entry(self.scrollable_frame, width=40)
+        self.loc_adresse.grid(row=6, column=1, pady=5)
+        
+        # Paiement
+        ttk.Label(self.scrollable_frame, text="Information Paiement", font=('Helvetica', 12, 'bold')).grid(row=7, column=0, columnspan=2, pady=10)
+        ttk.Label(self.scrollable_frame, text="Date de quittance *").grid(row=8, column=0)
+        self.date_entry = DateEntry(self.scrollable_frame, width=37, locale='fr_FR')
+        self.date_entry.grid(row=8, column=1, pady=5)
+        
+        ttk.Label(self.scrollable_frame, text="Période de location").grid(row=9, column=0, columnspan=2)
+        
+        date_frame = ttk.Frame(self.scrollable_frame)
+        date_frame.grid(row=10, column=0, columnspan=2)
+        
+        ttk.Label(date_frame, text="Du *").grid(row=0, column=0)
+        self.periode_debut = DateEntry(date_frame, width=15, locale='fr_FR')
+        self.periode_debut.grid(row=0, column=1)
+        
+        ttk.Label(date_frame, text="Au *").grid(row=0, column=2)
+        self.periode_fin = DateEntry(date_frame, width=15, locale='fr_FR')
+        self.periode_fin.grid(row=0, column=3)
+        
+        ttk.Label(self.scrollable_frame, text="Montant du loyer (€) *").grid(row=11, column=0)
+        self.montant_loyer = ttk.Entry(self.scrollable_frame, width=40)
+        self.montant_loyer.grid(row=11, column=1, pady=5)
+        
+        ttk.Label(self.scrollable_frame, text="Charges (€) *").grid(row=12, column=0)
+        self.charges = ttk.Entry(self.scrollable_frame, width=40)
+        self.charges.grid(row=12, column=1, pady=5)
+        
+        # Boutons
+        button_frame = ttk.Frame(self.scrollable_frame)
+        button_frame.grid(row=13, column=0, columnspan=2, pady=20)
+        
+        ttk.Button(button_frame, text="Générer la quittance", command=self.generate_quittance).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Ouvrir dossier quittances", command=self.open_quittances_folder).pack(side=tk.LEFT, padx=5)
+
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def open_quittances_folder(self):
+        """Ouvre le dossier contenant les quittances générées"""
+        if platform.system() == "Windows":
+            os.startfile(self.quittances_dir)
+        else:
+            subprocess.run(['xdg-open', self.quittances_dir])
+
+    def format_date_fr(self, date):
+        """Formate une date en français"""
+        return format_date(date, format='long', locale='fr_FR')
+
+    def validate_fields(self):
+        """Valide tous les champs obligatoires"""
+        if not self.prop_nom.get().strip():
+            messagebox.showerror("Erreur", "Le nom du propriétaire est obligatoire")
+            return False
+        if not self.prop_adresse.get().strip():
+            messagebox.showerror("Erreur", "L'adresse du propriétaire est obligatoire")
+            return False
+        if not self.loc_nom.get().strip():
+            messagebox.showerror("Erreur", "Le nom du locataire est obligatoire")
+            return False
+        if not self.loc_adresse.get().strip():
+            messagebox.showerror("Erreur", "L'adresse du logement est obligatoire")
+            return False
+            
+        try:
+            loyer = float(self.montant_loyer.get().replace(',', '.'))
+            if loyer <= 0:
+                messagebox.showerror("Erreur", "Le montant du loyer doit être supérieur à 0")
+                return False
+        except ValueError:
+            messagebox.showerror("Erreur", "Le montant du loyer doit être un nombre valide")
+            return False
+            
+        try:
+            charges = float(self.charges.get().replace(',', '.'))
+            if charges < 0:
+                messagebox.showerror("Erreur", "Les charges ne peuvent pas être négatives")
+                return False
+        except ValueError:
+            messagebox.showerror("Erreur", "Les charges doivent être un nombre valide")
+            return False
+            
+        if self.periode_debut.get_date() > self.periode_fin.get_date():
+            messagebox.showerror("Erreur", "La date de début doit être antérieure à la date de fin")
+            return False
+            
+        return True
+
+    def generate_quittance(self):
+        try:
+            # Valider les champs
+            if not self.validate_fields():
+                return
+
+            # Générer le nom du fichier
+            pdf_filename = f"quittance_{self.date_entry.get_date().strftime('%Y%m%d')}.pdf"
+            pdf_path = os.path.join(self.quittances_dir, pdf_filename)
+
+            # Préparer les données
+            date_quittance = self.format_date_fr(self.date_entry.get_date())
+            date_debut = self.format_date_fr(self.periode_debut.get_date())
+            date_fin = self.format_date_fr(self.periode_fin.get_date())
+            
+            loyer = float(self.montant_loyer.get().replace(',', '.'))
+            charges = float(self.charges.get().replace(',', '.'))
+            total = loyer + charges
+
+            # Créer le document PDF
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=A4,
+                rightMargin=20*mm,
+                leftMargin=20*mm,
+                topMargin=20*mm,
+                bottomMargin=20*mm
+            )
+
+            # Styles
+            styles = getSampleStyleSheet()
+            
+            # Style pour le titre principal
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=40,  # Taille augmentée à 40
+                alignment=1,  # Centré
+                spaceAfter=10,  # Augmenté l'espace après
+                textColor=colors.HexColor('#000435'),  # Bleu foncé
+                fontName='Helvetica-Bold',
+                leading=48  # Augmenté l'interligne pour le grand titre
+            )
+            
+            # Style pour le sous-titre
+            subtitle_style = ParagraphStyle(
+                'CustomSubTitle',
+                parent=styles['Heading2'],
+                fontSize=14,  # Taille réduite
+                alignment=1,  # Centré
+                spaceAfter=35,
+                textColor=colors.HexColor('#000435'),  # Bleu foncé
+                fontName='Helvetica',
+                leading=16  # Interligne ajusté
+            )
+
+            # Style normal pour le contenu
+            normal_style = styles['Normal']
+            normal_style.fontSize = 12
+            normal_style.leading = 16
+
+            # Contenu
+            elements = []
+            
+            # En-tête avec grand titre
+            elements.append(Spacer(1, 30))
+            elements.append(Paragraph("QUITTANCE DE LOYER", title_style))
+            elements.append(Spacer(1, 10))  # Espace réduit entre titre et sous-titre
+            
+            # Formatage de la date pour le sous-titre
+            mois = self.date_entry.get_date().strftime("%B")
+            annee = self.date_entry.get_date().year
+            
+            # Dictionnaire des mois en français
+            mois_fr = {
+                'January': 'janvier', 'February': 'février', 'March': 'mars',
+                'April': 'avril', 'May': 'mai', 'June': 'juin',
+                'July': 'juillet', 'August': 'août', 'September': 'septembre',
+                'October': 'octobre', 'November': 'novembre', 'December': 'décembre'
+            }
+            
+            # Convertir le mois en français
+            mois = mois_fr.get(mois, mois)
+            
+            # Construire la chaîne de date
+            date_formatted = f"{mois} {annee}"
+            
+            elements.append(Paragraph(f"Quittance de loyer du {date_formatted}", subtitle_style))  # "mois de" supprimé
+            elements.append(Spacer(1, 35))
+
+            # Propriétaire
+            elements.append(Paragraph("<b>Propriétaire</b>", normal_style))
+            elements.append(Paragraph(f"Nom : {self.prop_nom.get().strip()}", normal_style))
+            elements.append(Paragraph(f"Adresse : {self.prop_adresse.get().strip()}", normal_style))
+            elements.append(Spacer(1, 20))
+
+            # Locataire
+            elements.append(Paragraph("<b>Locataire</b>", normal_style))
+            elements.append(Paragraph(f"Nom : {self.loc_nom.get().strip()}", normal_style))
+            elements.append(Paragraph(f"Adresse du logement : {self.loc_adresse.get().strip()}", normal_style))
+            elements.append(Spacer(1, 20))
+
+            # Détails du paiement
+            elements.append(Paragraph("<b>Détails du Paiement</b>", normal_style))
+            elements.append(Spacer(1, 10))
+
+            # Créer un style pour les cellules du tableau
+            payment_style = ParagraphStyle(
+                'PaymentStyle',
+                parent=normal_style,
+                fontSize=12,
+                leading=16,
+                spaceBefore=6,
+                spaceAfter=6
+            )
+
+            # Formater les données avec le style personnalisé
+            data = [
+                [Paragraph("Période :", payment_style), 
+                 Paragraph(f"Du {date_debut} au {date_fin}", payment_style)],
+                [Paragraph("Montant du loyer :", payment_style), 
+                 Paragraph(f"{loyer:.2f} €".replace('.', ','), payment_style)],
+                [Paragraph("Charges :", payment_style), 
+                 Paragraph(f"{charges:.2f} €".replace('.', ','), payment_style)],
+                [Paragraph("<b>Total :</b>", payment_style), 
+                 Paragraph(f"<b>{total:.2f} €</b>".replace('.', ','), payment_style)]
+            ]
+            
+            # Créer le tableau avec des espacements appropriés
+            table = Table(data, colWidths=[100*mm, 60*mm], rowHeights=12*mm)
+            table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),  # Aligner les montants à droite
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black),  # Ligne uniquement au-dessus du total
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 20))
+
+            # Certification
+            elements.append(Paragraph(
+                f"Je soussigné, {self.prop_nom.get().strip()}, propriétaire du logement mentionné ci-dessus, "
+                f"certifie avoir reçu de {self.loc_nom.get().strip()} la somme totale de {total:.2f} €".replace('.', ',') +
+                " au titre du loyer et des charges pour la période indiquée.",
+                normal_style
+            ))
+            elements.append(Spacer(1, 20))
+
+            # Signature
+            elements.append(Paragraph(f"Fait à Les mureaux, le {date_quittance}", normal_style))
+            elements.append(Spacer(1, 30))
+            elements.append(Paragraph("Signature du propriétaire :", normal_style))
+            elements.append(Spacer(1, 40))
+
+            # Note de bas de page
+            footer_style = ParagraphStyle(
+                'Footer',
+                parent=normal_style,
+                fontSize=8,
+                textColor=colors.gray
+            )
+            elements.append(Paragraph(
+                "Cette quittance annule tous les reçus qui auraient pu être établis précédemment en cas de paiement "
+                "partiel du montant du présent terme. Elle est à conserver pendant trois ans par le locataire "
+                "(article 7-1 de la loi n°89-462 du 6 juillet 1989)",
+                footer_style
+            ))
+
+            # Générer le PDF
+            doc.build(elements)
+
+            # Ouvrir le PDF généré
+            if platform.system() == "Windows":
+                os.startfile(pdf_path)
+            else:
+                subprocess.run(['xdg-open', pdf_path])
+            
+            messagebox.showinfo("Succès", 
+                              f"La quittance a été générée avec succès !\n\n"
+                              f"Nom du fichier : {pdf_filename}\n"
+                              f"Emplacement : {self.quittances_dir}")
+            
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Une erreur est survenue : {str(e)}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = QuittanceApp(root)
+    root.mainloop()
